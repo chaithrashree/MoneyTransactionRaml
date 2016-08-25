@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mule xmlns:metadata="http://www.mulesoft.org/schema/mule/metadata" xmlns:json="http://www.mulesoft.org/schema/mule/json" xmlns:db="http://www.mulesoft.org/schema/mule/db"
+	xmlns:dw="http://www.mulesoft.org/schema/mule/ee/dw"
+	xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:apikit="http://www.mulesoft.org/schema/mule/apikit" xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns:spring="http://www.springframework.org/schema/beans" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd
+http://www.mulesoft.org/schema/mule/ee/dw http://www.mulesoft.org/schema/mule/ee/dw/current/dw.xsd
+http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/apikit http://www.mulesoft.org/schema/mule/apikit/current/mule-apikit.xsd
+http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans-3.1.xsd
+http://www.mulesoft.org/schema/mule/json http://www.mulesoft.org/schema/mule/json/current/mule-json.xsd">
+    <http:listener-config name="api-httpListenerConfig" host="0.0.0.0" port="8081" doc:name="HTTP Listener Configuration"/>
+    <apikit:config name="api-config" raml="api.raml" consoleEnabled="false" doc:name="Router"/>
+    <db:oracle-config name="Oracle_Configuration" host="localhost" port="1521" instance="xe" user="system" password="system" doc:name="Oracle Configuration"/>
+    <flow name="api-main">
+        <http:listener config-ref="api-httpListenerConfig" path="/api/*" doc:name="HTTP"/>
+        <apikit:router config-ref="api-config" doc:name="APIkit Router"/>
+        <exception-strategy ref="api-apiKitGlobalExceptionMapping" doc:name="Reference Exception Strategy"/>
+    </flow>
+    <flow name="api-console">
+        <http:listener config-ref="api-httpListenerConfig" path="/console/*" doc:name="HTTP"/>
+        <apikit:console config-ref="api-config" doc:name="APIkit Console"/>
+    </flow>
+    <flow name="get:/User_accounts:api-config">
+   <set-session-variable variableName="UserID" value="#[message.inboundProperties.'http.query.params'.userid]" doc:name="UserID"/>
+        <logger message="#[sessionVars.UserID]" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="ToAccountNumber" value="#[message.inboundProperties.'http.query.params'.toAccountNumber]" doc:name="ToAccountNumber"/>
+        <logger message="#[sessionVars.ToAccountNumber]" level="INFO" doc:name="Logger"/>
+
+        <set-session-variable variableName="FromAccountNumber" value="#[message.inboundProperties.'http.query.params'.fromAccountNumber]" doc:name="FromAccountNumber"/>
+        <logger message="#[sessionVars.FromAccountNumber]" level="INFO" doc:name="Logger"/>
+        <set-session-variable variableName="AccountType" value="#[message.inboundProperties.'http.query.params'.accountType]" doc:name="AccountType"/>
+        <set-session-variable variableName="TransactionType" value="#[message.inboundProperties.'http.query.params'.transactionType]" doc:name="TransactionType"/>
+        <set-session-variable variableName="TransactionAmount" value="#[message.inboundProperties.'http.query.params'.transactionAmount]" doc:name="TransactionAmount"/>
+        <db:select config-ref="Oracle_Configuration" doc:name="Database">
+            <db:parameterized-query><![CDATA[select count(*) from SUNTRUST_ACCOUNT where (select count(*) from SUNTRUST_ACCOUNT where User_ID=#[sessionVars.UserID]  and Account_No =#[sessionVars.FromAccountNumber])=1 and Account_No=#[sessionVars.ToAccountNumber]]]></db:parameterized-query>
+
+
+        </db:select>
+        <set-session-variable variableName="Count" value="#[payload[0]['count(*)']]" doc:name="Count"/>
+        <logger message="#[sessionVars.Count]" level="INFO" doc:name="Logger"/>
+        <choice doc:name="Choice">
+            <when expression="#[sessionVars.Count==1]">
+                <set-session-variable variableName="Message" value="#['SUCCESS']" doc:name="Success"/>
+                <logger message="#[sessionVars.Message]" level="INFO" doc:name="Logger"/>
+                <db:insert config-ref="Oracle_Configuration" doc:name="Database">
+                    <db:parameterized-query><![CDATA[INSERT INTO SUNTRUST_TRANSACTION (ToAccountnumber,FromAccountNumber,TransactionType,TransactionAmount,AccountType) 
+values (#[sessionVars.ToAccountNumber],#[sessionVars.FromAccountNumber],#[sessionVars.TransactionType],#[sessionVars.TransactionAmount],#[sessionVars.AccountType])]]></db:parameterized-query>
+                </db:insert>
+                <db:select config-ref="Oracle_Configuration" doc:name="Database">
+                    <db:parameterized-query><![CDATA[select TransactionNumber,ToAccountNumber from SUNTRUST_TRANSACTION where ToAccountNumber=#[sessionVars.ToAccountNumber] and DATEOFCREATION like ( SELECT SYSDATE FROM DUAL)]]></db:parameterized-query>
+                </db:select>
+                <json:object-to-json-transformer doc:name="Object to JSON"/>
+                <logger message="before tramsform #[payload]" level="INFO" doc:name="Logger"/>
+
+                <dw:transform-message doc:name="Transform Message">
+                    <dw:input-payload/>
+                    <dw:set-payload><![CDATA[
+%dw 1.0
+%output application/json
+---
+payload map
+{
+	ToAccountNumber : $.TOACCOUNTNUMBER,
+    TransactionStatus:"SUCCESS",
+    TransactionNumber:$.TRANSACTIONNUMBER
+}]]></dw:set-payload>
+                </dw:transform-message>
+                <logger message="after#[payload]" level="INFO" doc:name="Logger"/>
+                <set-payload value="#[payload]" doc:name="Set Payload"/>
+            </when>
+            <when expression="#[sessionVars.Count!=1]">
+                <set-payload value="{&quot;TransactionStatus&quot;  :  &quot;FAILURE&quot;}" doc:name="Set Payload"/>
+            </when>
+            <otherwise>
+                <logger message="Invalid Data " level="INFO" doc:name="Logger"/>
+            </otherwise>
+        </choice>
+
+    </flow>
+    <flow name="post:/User_accounts:api-config">
+        <set-payload value="#[NullPayload.getInstance()]" doc:name="Set Payload"/>
+    </flow>
+    <apikit:mapping-exception-strategy name="api-apiKitGlobalExceptionMapping">
+        <apikit:mapping statusCode="404">
+            <apikit:exception value="org.mule.module.apikit.exception.NotFoundException" />
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Resource not found&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="405">
+            <apikit:exception value="org.mule.module.apikit.exception.MethodNotAllowedException" />
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Method not allowed&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="415">
+            <apikit:exception value="org.mule.module.apikit.exception.UnsupportedMediaTypeException" />
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Unsupported media type&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="406">
+            <apikit:exception value="org.mule.module.apikit.exception.NotAcceptableException" />
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Not acceptable&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+        <apikit:mapping statusCode="400">
+            <apikit:exception value="org.mule.module.apikit.exception.BadRequestException" />
+            <set-property propertyName="Content-Type" value="application/json" doc:name="Property"/>
+            <set-payload value="{ &quot;message&quot;: &quot;Bad request&quot; }" doc:name="Set Payload"/>
+        </apikit:mapping>
+    </apikit:mapping-exception-strategy>
+</mule>

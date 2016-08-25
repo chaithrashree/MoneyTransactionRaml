@@ -1,0 +1,22 @@
+#%RAML 0.8
+baseUri: https://mocksvc.mulesoft.com/mocks/ec263c31-b610-48c9-af7d-e83fab4674a3
+title: MoneyTransaction
+version: 2.0
+/User_accounts:
+    get:
+      queryParameters:
+        userid:
+        toAccountNumber :
+        fromAccountNumber :
+        accountType :
+          enum: [savings,credit,checkin]
+        transactionType :
+          enum: [NEFT,IMPS,RTGS]
+        transactionAmount :
+      responses:
+        200 :
+          body :
+           application/json :
+              example : |
+                { "ToAccountNumber" : "11234"} 
+    post:
